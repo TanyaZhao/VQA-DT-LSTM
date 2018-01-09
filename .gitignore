@@ -1,3 +1,4 @@
+*.pyc
 dealed_data/
 original_data/
 lib/stanford-parser/
