@@ -52,14 +52,23 @@ class ChildSumTreeLSTM(nn.Module):
 # attention 在DT-LSTM之前
 # putting the whole model together
 class ImgWordAtt(nn.Module):
-    def __init__(self, vocab_size, ebd_dim, mem_dim, dropout_p, att_hidd_dim):
+    def __init__(self, vocab_size, ebd_dim, mem_dim, dropout_p, att_hidd_dim, freeze_emb):
         super(ImgWordAtt, self).__init__()
         self.use_cuda = torch.torch.cuda.is_available()
         self.ebd_dim = ebd_dim
         self.vocab_size = vocab_size
         self.dropout_p = dropout_p
 
-        self.emb = nn.Embedding(vocab_size, ebd_dim,padding_idx=Constants.PAD)
+        self.vgg = models.vgg19(pretrained=True)
+        # 删除vgg19特征最后一层
+        # self.vgg.features = nn.Sequential(*list(self.vgg.features.children())[:-1])
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+
+        self.emb = nn.Embedding(vocab_size, ebd_dim, padding_idx=Constants.PAD)
+        if freeze_emb:
+            self.emb.weight.requires_grad = False
+
         self.img_feature = nn.Linear(512,ebd_dim)   #512是vgg图片特征抽取之后的维度
         self.dropout = nn.Dropout(self.dropout_p)
         self.att_img = nn.Linear(ebd_dim,att_hidd_dim,bias=False)    #49是图片区域数量7x7
@@ -69,14 +78,18 @@ class ImgWordAtt(nn.Module):
         self.childsumtreelstm = ChildSumTreeLSTM( 2 * ebd_dim, mem_dim)
 
 
-    def forward(self, img_feature, question, tree):
+    def forward(self, img, question, tree):
+
+        img_feature = self.vgg.features(img)   # 1x512x7x7
+        img_feature = img_feature.squeeze(0)     # 512x7x7
+        img_feature = torch.t(img_feature.view(img_feature.size(0),-1)) # 49 x 512
 
         img_feature = F.relu(self.img_feature(img_feature))     #49 x word_embedding
         img_feature = self.dropout(img_feature)
 
         question = question.squeeze(0)
         # img Attention后和question拼接后作为ChildSumTreeLSTM输入
-        attedInput = torch.zeros(question.size(0), 2*self.ebd_dim)
+        attedInput = torch.Tensor(question.size(0), 2*self.ebd_dim).normal_(-0.05,0.05)
         attedInput = Var(attedInput)
         if self.use_cuda:
             attedInput = attedInput.cuda()
@@ -95,7 +108,7 @@ class ImgWordAtt(nn.Module):
                new_img_feature = new_img_feature.cuda()
 
             for i in range(attImg.size(0)):
-                addImgWord[i] = F.relu(attImg[i] + attWord)
+                addImgWord[i] = F.tanh(attImg[i] + attWord)
             att_weight = self.att(addImgWord).squeeze(1)     # 49 x 1
             att_weight = F.softmax(att_weight)
 
@@ -109,13 +122,13 @@ class ImgWordAtt(nn.Module):
 
         attedInput = self.dropout(attedInput)
         state, hidden = self.childsumtreelstm(tree, attedInput)
-        # state, hidden = self.childsumtreelstm(tree, question)
         return state
 
 class SiameseNetWork(nn.Module):
-    def __init__(self,vocab_size, num_classes, ebd_dim, mem_dim,dropout_p,att_hidd_dim,mid_dim,mlp1_dim,mlp2_dim):
+    def __init__(self,vocab_size, num_classes, ebd_dim, mem_dim,dropout_p,
+                 att_hidd_dim,mid_dim,mlp1_dim,mlp2_dim, freeze_emb):
         super(SiameseNetWork,self).__init__()
-        self.attTreeLstm = ImgWordAtt(vocab_size, ebd_dim, mem_dim, dropout_p, att_hidd_dim)
+        self.attTreeLstm = ImgWordAtt(vocab_size, ebd_dim, mem_dim, dropout_p, att_hidd_dim, freeze_emb)
         self.dropout = nn.Dropout(dropout_p)
         self.mlp1 = nn.Linear(mem_dim,mlp1_dim)
         self.mlp2 = nn.Linear(mlp1_dim,mlp2_dim)
@@ -123,9 +136,9 @@ class SiameseNetWork(nn.Module):
         self.linear = nn.Linear(mem_dim,mid_dim)
         self.classifyProb = nn.Linear(mid_dim,num_classes)
 
-    def forward(self, img_feature, question, tree, neg_img_feature):
-        posPairOut = self.dropout(self.attTreeLstm(img_feature, question, tree))
-        negPairOut = self.dropout(self.attTreeLstm(neg_img_feature,question,tree))
+    def forward(self, img, question, tree, neg_img):
+        posPairOut = self.dropout(self.attTreeLstm(img, question, tree))
+        negPairOut = self.dropout(self.attTreeLstm(neg_img,question,tree))
 
         posScoreVec = F.relu(self.mlp1(posPairOut))
         posScoreVec = F.relu(self.mlp2(posScoreVec))

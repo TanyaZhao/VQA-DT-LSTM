@@ -7,10 +7,9 @@ from torch.autograd import Variable
 import time
 class TrainTest(object):
 
-    def __init__(self,model,vgg,criterion,optimizer,batchsize,num_classes,epochs):
+    def __init__(self,model,criterion,optimizer,batchsize,num_classes,epochs):
         super(TrainTest,self).__init__()
         self.model  = model
-        self.vgg = vgg
         self.criterion = criterion
         self.optimizer = optimizer
         self.batchsize = batchsize
@@ -79,17 +78,7 @@ class TrainTest(object):
                 negImg = Variable(negImg)
                 y = Variable(y)
 
-            # 向前传播
-            img_feature = self.vgg.features(img)   # 1x512x7x7
-            img_feature = img_feature.squeeze(0)     # 512x7x7
-            img_feature = torch.t(img_feature.view(img_feature.size(0),-1)) # 49 x 512
-
-            neg_img_feature = self.vgg.features(negImg)
-            neg_img_feature = neg_img_feature.squeeze(0)     # 512x7x7
-            neg_img_feature = torch.t(neg_img_feature.view(neg_img_feature.size(0),-1)) # 49 x 512
-
-
-            probOut,posScoreVec,negScoreVec = self.model(img_feature,question,tree,neg_img_feature)
+            probOut,posScoreVec,negScoreVec = self.model(img,question,tree,negImg)
             # loss = criterion(probOut, label,posScoreVec,negScoreVec,y)
             loss = self.criterion(probOut,label,posScoreVec,negScoreVec,y)
 
@@ -100,8 +89,9 @@ class TrainTest(object):
 
             # 向后传播
             loss.backward()
-            #
+
             idx += 1
+
             if idx % self.batchsize == 0:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -143,15 +133,8 @@ class TrainTest(object):
                 negImg = Variable(negImg,volatile=True)
                 y = Variable(y,volatile=True)
 
-            img_feature = self.vgg.features(img)   # 1x512x7x7
-            img_feature = img_feature.squeeze(0)     # 512x7x7
-            img_feature = torch.t(img_feature.view(img_feature.size(0),-1)) # 49 x 512
 
-            neg_img_feature = self.vgg.features(negImg)
-            neg_img_feature = neg_img_feature.squeeze(0)     # 512x7x7
-            neg_img_feature = torch.t(neg_img_feature.view(neg_img_feature.size(0),-1)) # 49 x 512
-
-            probOut,posScoreVec,negScoreVec = self.model(img_feature,question,tree,neg_img_feature)
+            probOut,posScoreVec,negScoreVec = self.model(img,question,tree,negImg)
             loss = self.criterion(probOut,label,posScoreVec,negScoreVec,y)
 
             eval_loss += loss.data[0] * label.size(0)

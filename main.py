@@ -11,7 +11,7 @@ from traintest import TrainTest
 from loss import ModelLoss
 import os
 import time
-
+from GloveModel import Glove
 
 if __name__ =="__main__":
 
@@ -41,43 +41,48 @@ if __name__ =="__main__":
     )
 
     # 定义超参数wo
-    learning_rate = 0.002                            # 学习速率
-    batchsize = 32                                  # batchsize
+    learning_rate = 0.001                            # 学习速率
+    batchsize = 64                                  # batchsize
     epochs =  300                                   # epoch 数量
 
     vocab_size  = vocab_classes.vocab_size()        # 词汇数量
     num_classes = vocab_classes.classes_size()      # 分类数量（不同answer个数）
-    ebd_dim = 150                                   # wordEmdedding 词向量维度
-    mem_dim = 200                                   # TreeLSTM 输出维度
-    dropout_p = 0.2                                 # Dropout系数
+    ebd_dim = 100                                   # wordEmdedding 词向量维度
+    mem_dim = 300                                   # TreeLSTM 输出维度
+    dropout_p = 0.4                                 # Dropout系数
     att_hidd_dim = 400                              # attention时中间转换维度
     mid_dim = 200                                   # 概率分类前一Linear层维度
     mlp1_dim = 150                                  # Siamese网络最后mlp1维度
     mlp2_dim = 100                                  # Siamese网络最后mlp2维度
+    freeze_emb = True                              # embeding 是否在训练中调整参数, True不调整, False调整
 
     model = SiameseNetWork(vocab_size,num_classes,ebd_dim, mem_dim, dropout_p,
-            att_hidd_dim,mid_dim,mlp1_dim,mlp2_dim
+            att_hidd_dim,mid_dim,mlp1_dim,mlp2_dim,freeze_emb
     )
-
-    # vgg19 = models.vgg19(pretrained=True)
-    #带有batch normalization vgg19_bn
-    vgg19 = models.vgg19(pretrained=True)
-    # 删除vgg19特征最后一层
-    # vgg19.features = nn.Sequential(*list(vgg19.features.children())[:-1])
-    # print vgg19.features
-    for param in vgg19.parameters():
-        param.requires_grad = False
-    if  torch.cuda.is_available(): #判断是否有GPU加速
-        model = model.cuda()
-        vgg19 = vgg19.cuda()
-
     # 定义loss和optimizer
     criterion = ModelLoss()
     # weight_decay 一般设置 1e-8
-    optimizer = optim.RMSprop(model.parameters(),lr=learning_rate,alpha=0.8)
-    # optimizer = optim.Adam(model.parameters(),lr=learning_rate,betas=(0.9,0.99))
+    optimizer = optim.RMSprop(filter(lambda p: p.requires_grad, model.parameters()),
+                              lr=learning_rate, alpha=0.8, weight_decay=1e-4)
+    # optimizer = optim.Adam(filter(lambda p: p.requires_grad,model.parameters()),lr=learning_rate,betas=(0.9,0.99))
 
-    trainTester = TrainTest(model,vgg19,criterion,optimizer,batchsize,num_classes,epochs)
+    emb_file = os.path.join("dealed_data", "emb_%sd_file.pth" % str(ebd_dim))
+    if os.path.isfile(emb_file):
+        emb = torch.load(emb_file)
+    else:
+        glove = Glove(ebd_dim)
+        emb = torch.Tensor(vocab_size, ebd_dim).normal_(-0.05,0.05)
+        for word in vocab_classes.wordToIdx.keys():
+            emb[vocab_classes.get_vocab_index(word)] = torch.Tensor(glove.getVec(word))
+        torch.save(emb, emb_file)
+
+    if  torch.cuda.is_available(): #判断是否有GPU加速
+        model = model.cuda()
+        criterion = criterion.cuda()
+        emb = emb.cuda()
+    model.attTreeLstm.emb.weight.data.copy_(emb)
+
+    trainTester = TrainTest(model,criterion,optimizer,batchsize,num_classes,epochs)
 
     # 开始训练
     for epoch in range(epochs):
